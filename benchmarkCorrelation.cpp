@@ -4,7 +4,7 @@ Chroma examples, www.github.com/fim16418/Chroma
 
 Copyright (C) 2017
 
-Source code: benchmark_su3.cpp
+Source code: benchmarkCorrelation.cpp
 
 Author: Moritz Fink <fink.moritz@gmail.com>
 
@@ -29,9 +29,7 @@ See the full license in the file "LICENSE" in the top level distribution directo
 
 #include "chroma.h"
 #include "actions/ferm/invert/syssolver_linop_cg.h"
-#include <iostream>
 #include <fstream>
-#include <string>
 
 #if defined(ENABLE_OPENMP)
 #include "omp.h"
@@ -41,6 +39,7 @@ inline void omp_set_num_threads(int num) {return;}
 inline omp_int_t omp_get_max_threads() {return 1;}
 #endif
 
+int nData;
 int nLoops;
 multi1d<int> latt_size(4);
 int nThreads;
@@ -74,8 +73,9 @@ double standardDeviation(double* array,int len)
 
 bool processCmdLineArgs(int argc,char** argv)
 {
-  nLoops = 1000;
-  latt_size[0]=4; latt_size[1]=4; latt_size[2]=4; latt_size[3]=8;
+  nData  = 2;
+  nLoops = 10;
+  latt_size[0]=4; latt_size[1]=4; latt_size[2]=4; latt_size[3]=4;
   nThreads = omp_get_max_threads();
   outFileName = "output.txt";
 
@@ -89,6 +89,13 @@ bool processCmdLineArgs(int argc,char** argv)
         i+=4;
       } else {
         std::cerr << "--lattice x y z t must be the last option." << std::endl;
+        return false;
+      }
+    } else if(option == "--nData") {
+      if(i+1 < argc) {
+        nData = atoi(argv[++i]);
+      } else {
+        std::cerr << "--nData option requires one argument." << std::endl;
         return false;
       }
     } else if(option == "--nLoops") {
@@ -111,10 +118,12 @@ bool processCmdLineArgs(int argc,char** argv)
         outFileName = argv[++i];
       } else {
         std::cerr << "--outFile option requires one argument." << std::endl;
+        return false;
       }
     }
   }
   std::cout << "Lattice = " << latt_size[0] << " " << latt_size[1] << " " << latt_size[2] << " " << latt_size[3] << std::endl
+            << "Measurements = " << nData << std::endl
             << "Loops per measurement = " << nLoops << std::endl
             << "Threads = " << omp_get_max_threads() << std::endl
             << "Output file = " << outFileName << std::endl << std::endl;
@@ -134,29 +143,63 @@ int main(int argc, char **argv)
   }
 
   Layout::setLattSize(latt_size);
-  Layout::create(); //call only once!
+  Layout::create();
 
-  LatticeColorMatrix z;
-  LatticeColorMatrix x;
-  LatticeColorMatrix y;
+//////////////////////////////////////
+/* Fill quark_propagator with 3.14: */
 
-  StopWatch timer;
-  timer.reset();
-  timer.start();
-  for(int i=0; i<nLoops; i++) {
-    z=x*y; //x=x*y not allowed (cf qdp++ manual 3.3.5)
+  LatticePropagator quark_propagator = zero;
+  Complex c0 = 3.14;
+
+  LatticeColorMatrix lcMatrix;
+  for(int i=0; i<3; i++) {
+    for(int j=0; j<3; j++) {
+      pokeColor(lcMatrix,c0,i,j);
+  }}
+
+  for(int i=0; i<4; i++) {
+    for(int j=0; j<4; j++) {
+      pokeSpin(quark_propagator,lcMatrix,i,j);
+  }}
+
+//////////////////////////////////////
+
+  Gamma gamma5 = Gamma(15);
+  LatticePropagator anti_quark = gamma5 * quark_propagator * gamma5;
+  anti_quark = adj(anti_quark);
+
+  double timeData[nData];
+  double flopData[nData];
+
+  int latticeSize = latt_size[0]*latt_size[1]*latt_size[2]*latt_size[3];
+  unsigned long flopsPerLoop = 2 * 30262 * latticeSize;
+
+  for(int j=0; j<nData; j++) {
+    StopWatch timer;
+    timer.reset();
+    timer.start();
+
+    for(int i=0; i<nLoops; i++) {
+      LatticeComplex corr_fn = trace(anti_quark * gamma5 * quark_propagator * gamma5);
+
+      //output for comparison:
+      /*multi1d<int> site(4); site[0] = 0; site[1] = 0; site[2] = 0; site[3] = 0;
+      Complex c0 = peekSite(corr_fn,site);
+      QDPIO::cout << endl << "out:" << c0 << endl; break;*/
+    }
+
+    timer.stop();
+
+    timeData[j] = timer.getTimeInSeconds();
+    flopData[j] = flopsPerLoop/timeData[j]/1000000000.0*nLoops;
   }
-  timer.stop();
-  double time = timer.getTimeInMicroseconds()/nLoops*1000.0;
-
-  int vol = Layout::vol();
-  double bytes = 3*vol*Nc*Nc*sizeof(Complex);
-  double flops = Nc*Nc*(6+8+8)*vol;
 
   ofstream file;
   file.open(outFileName,ios::app);
   if(file.is_open()) {
-    file << latt_size[0] << "\t" << bytes << "\t" << bytes/time << "\t" << flops/time << std::endl;
+    file << nThreads << "\t" << latt_size[0] << "\t"
+         << average(timeData,nData) << "\t" << standardDeviation(timeData,nData) << "\t"
+         << average(flopData,nData) << "\t" << standardDeviation(flopData,nData) << std::endl;
     file.close();
   } else {
     std::cerr << "Unable to open file!" << std::endl;
