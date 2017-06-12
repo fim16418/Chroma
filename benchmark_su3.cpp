@@ -90,78 +90,94 @@ bool processCmdLineArgs(int argc,char** argv)
         return false;
       }
     } else if(option == "--nLoops") {
-      if(i+1 < argc) {
-        nLoops = atoi(argv[++i]);
-      } else {
-        std::cerr << "--nLoops option requires one argument." << std::endl;
-        return false;
-      }
-    } else if(option == "--nThreads") {
-      if(i+1 < argc) {
-        nThreads = atoi(argv[++i]);
-        omp_set_num_threads(nThreads);
-      } else {
-        std::cerr << "--nThreads option requires one argument." << std::endl;
-        return false;
-      }
-    } else if(option == "--outFile") {
-      if(i+1 < argc) {
-        outFileName = argv[++i];
-      } else {
-        std::cerr << "--outFile option requires one argument." << std::endl;
-        return false;
+        if(i+1 < argc) {
+          nLoops = atoi(argv[++i]);
+        } else {
+          std::cerr << "--nLoops option requires one argument." << std::endl;
+          return false;
+        }
+      } else if(option == "--nThreads") {
+        if(i+1 < argc) {
+          nThreads = atoi(argv[++i]);
+          omp_set_num_threads(nThreads);
+        } else {
+          std::cerr << "--nThreads option requires one argument." << std::endl;
+          return false;
+        }
+      } else if(option == "--outFile") {
+        if(i+1 < argc) {
+          outFileName = argv[++i];
+        } else {
+          std::cerr << "--outFile option requires one argument." << std::endl;
+          return false;
+        }
       }
     }
+    std::cout << "Lattice = " << latt_size[0] << " " << latt_size[1] << " " << latt_size[2] << " " << latt_size[3] << std::endl
+              << "Loops per measurement = " << nLoops << std::endl
+              << "Threads = " << omp_get_max_threads() << std::endl
+              << "Output file = " << outFileName << std::endl << std::endl;
+    return true;
   }
-  std::cout << "Lattice = " << latt_size[0] << " " << latt_size[1] << " " << latt_size[2] << " " << latt_size[3] << std::endl
-            << "Loops per measurement = " << nLoops << std::endl
-            << "Threads = " << omp_get_max_threads() << std::endl
-            << "Output file = " << outFileName << std::endl << std::endl;
-  return true;
-}
 
 
-int main(int argc, char **argv)
-{
-  Chroma::initialize(&argc, &argv);
-  START_CODE();
+  int main(int argc, char **argv)
+  {
+    Chroma::initialize(&argc, &argv);
+    START_CODE();
 
-  if(!processCmdLineArgs(argc,argv)) {
+    if(!processCmdLineArgs(argc,argv)) {
+      END_CODE();
+      Chroma::finalize();
+      exit(1);
+    }
+
+    Layout::setLattSize(latt_size);
+    Layout::create(); //call only once!
+
+    LatticeColorMatrix z;
+    LatticeColorMatrix x;
+    LatticeColorMatrix y;
+
+    StopWatch timer;
+    timer.reset();
+    timer.start();
+    for(int i=0; i<nLoops; i++) {
+      z=x*y; //x=x*y not allowed (cf qdp++ manual 3.3.5)
+    }
+    timer.stop();
+    double time = timer.getTimeInMicroseconds()/nLoops*1000.0;
+
+    int vol = Layout::vol();
+    double bytes = 3*vol*Nc*Nc*sizeof(Complex);
+    double flops = Nc*Nc*(6+8+8)*vol;
+
+    int bossRank = 0;
+    int rank;
+    MPI_Comm_rank(MPI_COMM_WORLD,&rank);
+
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    double sumTime;
+    MPI_Reduce(&time,&sumTime,1,MPI_DOUBLE,MPI_SUM,bossRank,MPI_COMM_WORLD);
+
+    int nProc;
+    MPI_Comm_size(MPI_COMM_WORLD,&nProc);
+    time = sumTime/nProc;
+
+    if(rank == bossRank) {
+      ofstream file;
+      file.open(outFileName,ios::app);
+      if(file.is_open()) {
+        file << nThreads << "\t" << latt_size[0] << latt_size[1] << latt_size[2] << latt_size[3] << "\t"
+             << bytes << "\t" << bytes/time << "\t" << flops/time << std::endl;
+        file.close();
+      } else {
+        std::cerr << "Unable to open file!" << std::endl;
+      }
+    }
+
     END_CODE();
     Chroma::finalize();
-    exit(1);
+    exit(0);
   }
-
-  Layout::setLattSize(latt_size);
-  Layout::create(); //call only once!
-
-  LatticeColorMatrix z;
-  LatticeColorMatrix x;
-  LatticeColorMatrix y;
-
-  StopWatch timer;
-  timer.reset();
-  timer.start();
-  for(int i=0; i<nLoops; i++) {
-    z=x*y; //x=x*y not allowed (cf qdp++ manual 3.3.5)
-  }
-  timer.stop();
-  double time = timer.getTimeInMicroseconds()/nLoops*1000.0;
-
-  int vol = Layout::vol();
-  double bytes = 3*vol*Nc*Nc*sizeof(Complex);
-  double flops = Nc*Nc*(6+8+8)*vol;
-
-  ofstream file;
-  file.open(outFileName,ios::app);
-  if(file.is_open()) {
-    file << nThreads << "\t" << latt_size[0] << "\t" << bytes << "\t" << bytes/time << "\t" << flops/time << std::endl;
-    file.close();
-  } else {
-    std::cerr << "Unable to open file!" << std::endl;
-  }
-
-  END_CODE();
-  Chroma::finalize();
-  exit(0);
-}

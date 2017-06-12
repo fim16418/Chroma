@@ -1,6 +1,6 @@
 /*************************************************************************************
 
-Grid examples, www.github.com/fim16418/Grid
+Chroma examples, www.github.com/fim16418/Chroma
 
 Copyright (C) 2017
 
@@ -8,16 +8,6 @@ Source code: benchmarkDerivative.cpp
 
 Author: Moritz Fink <fink.moritz@gmail.com>
 
-This program uses the following library:
-
-
-
-Grid physics library, www.github.com/paboyle/Grid
-
-Copyright (C) 2015
-
-Author: Peter Boyle <paboyle@ph.ed.ac.uk>
-Author: paboyle <paboyle@ph.ed.ac.uk>
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -37,27 +27,25 @@ See the full license in the file "LICENSE" in the top level distribution directo
 *************************************************************************************/
 /*  END LEGAL */
 
-#include <Grid/Grid.h>
+#include "chroma.h"
+#include "actions/ferm/invert/syssolver_linop_cg.h"
+#include "meas/smear/displace.h" //rightNabla()
+#include <fstream>
 
-
-using namespace std;
-using namespace Grid;
-using namespace Grid::QCD;
-
+#include "omp.h"
 
 int nData;
 int nLoops;
-std::vector<int> latt_size(4);
-std::vector<int> mpi_layout(4);
+multi1d<int> latt_size(4);
 int nThreads;
 int mu;
 int length;
 std::string outFileName;
 
-bool overlapComms = false;
+using namespace QDP;
+using namespace Chroma;
 
-
-double average(double* array, int len)
+double average(double* array,int len)
 {
   double av = 0.0;
   for(int i=0; i<len; i++) {
@@ -66,178 +54,196 @@ double average(double* array, int len)
   return av/len;
 }
 
-bool processCmdLineArgs(int argc, char ** argv)
+bool processCmdLineArgs(int argc,char** argv)
 {
-  nData  = 20;
+  nData  = 1;
   nLoops = 1000;
-  latt_size = {4,4,4,4};
+  latt_size[0]=4; latt_size[1]=4; latt_size[2]=4; latt_size[3]=4;
   nThreads = omp_get_max_threads();
   mu = 0;
   length = 1;
   outFileName = "output.txt";
-  mpi_layout = {1,1,1,1};
 
   for(int i=1; i<argc; i++) {
     std::string option = std::string(argv[i]);
     if(option == "--lattice") {
-      if(i+5 == argc) { //--lattice must be last argument
-          for(int j=0; j<4; j++) {
-            latt_size[j] = atoi(argv[i+j+1]);
-          }
-          i+=4;
-        } else {
-          std::cerr << "--lattice x y z t must be the last option." << std::endl;
-          return false;
+      if(i+5 == argc) { //--lattice must be last option
+        for(int j=0; j<4; j++) {
+          latt_size[j] = atoi(argv[i+j+1]);
         }
-      } else if(option == "--nData") {
+        i+=4;
+      } else {
+        std::cerr << "--lattice x y z t must be the last option." << std::endl;
+        return false;
+      }
+    } else if(option == "--nData") {
         if(i+1 < argc) {
           nData = atoi(argv[++i]);
         } else {
-            std::cerr << "--nData option requires one argument." << std::endl;
-            return false;
-          }
-        } else if(option == "--nLoops") {
-          if(i+1 < argc) {
-            nLoops = atoi(argv[++i]);
-          } else {
-            std::cerr << "--nLoops option requires one argument." << std::endl;
-            return false;
-          }
-        } else if(option == "--nThreads") {
-          if(i+1 < argc) {
-            nThreads = atoi(argv[++i]);
-            omp_set_num_threads(nThreads);
-          } else {
-            std::cerr << "--nThreads option requires one argument." << std::endl;
-            return false;
-          }
-        } else if(option == "--mu") {
-          if(i+1 < argc) {
-            mu = atoi(argv[++i]);
-          } else {
-            std::cerr << "--mu option requires one argument." << std::endl;
-            return false;
-          }
-        } else if(option == "--length") {
-          if(i+1 < argc) {
-            length = atoi(argv[++i]);
-          } else {
-            std::cerr << "--length option requires one argument." << std::endl;
-            return false;
-          }
-        } else if(option == "--outFile") {
-          if(i+1 < argc) {
-            outFileName = argv[++i];
-          } else {
-            std::cerr << "--outFile option requires one argument." << std::endl;
-            return false;
-          }
-        } else if(option == "--mpiLayout") {
-          if(i+4 < argc) {
-            for(int j=0; j<4; j++) {
-              mpi_layout[j] = atoi(argv[i+j+1]);
-            }
-            i+=4;
-          } else {
-            std::cerr << "--mpiLayout option requires four arguments." << std::endl;
-            return false;
-          }
+          std::cerr << "--nData option requires one argument." << std::endl;
+          return false;
+        }
+      } else if(option == "--nLoops") {
+        if(i+1 < argc) {
+          nLoops = atoi(argv[++i]);
+        } else {
+          std::cerr << "--nLoops option requires one argument." << std::endl;
+          return false;
+        }
+      } else if(option == "--nThreads") {
+        if(i+1 < argc) {
+          nThreads = atoi(argv[++i]);
+          omp_set_num_threads(nThreads);
+        } else {
+          std::cerr << "--nThreads option requires one argument." << std::endl;
+          return false;
+        }
+      } else if(option == "--mu") {
+        if(i+1 < argc) {
+          mu = atoi(argv[++i]);
+        } else {
+          std::cerr << "--mu option requires one argument." << std::endl;
+          return false;
+        }
+      } else if(option == "--length") {
+        if(i+1 < argc) {
+          length = atoi(argv[++i]);
+        } else {
+          std::cerr << "--length option requires one argument." << std::endl;
+          return false;
+        }
+      } else if(option == "--outFile") {
+        if(i+1 < argc) {
+          outFileName = argv[++i];
+        } else {
+          std::cerr << "--outFile option requires one argument." << std::endl;
+          return false;
         }
       }
-  std::cout << "Lattice = " << latt_size[0] << " " << latt_size[1] << " " << latt_size[2] << " " << latt_size[3] << std::endl
-            << "Measurements = " << nData << std::endl
-            << "Loops per measurement = " << nLoops << std::endl
-            << "Threads = " << omp_get_max_threads() << std::endl
-            << "Derivative in direction " << mu << " with length " << length << std::endl
-            << "Mpi Layout = " << mpi_layout[0] << " " << mpi_layout[1] << " " << mpi_layout[2] << " " << mpi_layout[3] << std::endl
-            << "Output file = " << outFileName << std::endl << std::endl;
-  return true;
-}
-
-
-int main (int argc, char ** argv)
-{
-  Grid_init(&argc,&argv);
-
-  if( GridCmdOptionExists(argv,argv+argc,"--asynch") ){
-    overlapComms = true;
+    }
+    std::cout << "Lattice = " << latt_size[0] << " " << latt_size[1] << " " << latt_size[2] << " " << latt_size[3] << std::endl
+              << "Measurements = " << nData << std::endl
+              << "Loops per measurement = " << nLoops << std::endl
+              << "Threads = " << omp_get_max_threads() << std::endl
+              << "Derivative in direction " << mu << " with length " << length << std::endl
+              << "Output file = " << outFileName << std::endl << std::endl;
+    return true;
   }
+
+
+int main(int argc, char **argv)
+{
+  Chroma::initialize(&argc, &argv);
+  START_CODE();
 
   if(!processCmdLineArgs(argc,argv)) {
-    Grid_finalize();
-    return 1;
+    END_CODE();
+    Chroma::finalize();
+    exit(1);
   }
 
-  std::vector<int> simd_layout = GridDefaultSimd(Nd,vComplex::Nsimd());
-  GridCartesian               Grid(latt_size,simd_layout,mpi_layout);
+  Layout::setLattSize(latt_size);
+  Layout::create();
 
-  GridCartesian *UGrid = SpaceTimeGrid::makeFourDimGrid(latt_size,simd_layout,mpi_layout);
-  std::vector<LatticeColourMatrix> U(Nd,UGrid);
+//////////////////////////////////////
+/*        Fill gauge field:         */
 
-  LatticeGaugeField Umu(&Grid);
-  for(int i=0; i<Umu._odata.size(); i++) {
+  multi1d<LatticeColorMatrix> u(Nd);
+
   for(int dir=0; dir<Nd; dir++) {
-  for(int c1=0; c1<Nc; c1++) {
-  for(int c2=0; c2<Nc; c2++) {
-    Umu._odata[i]._internal[dir]._internal._internal[c1][c2] = dir+c1+c2;
+    LatticeColorMatrix mat;
+    for(int c1=0; c1<Nc; c1++) {
+      for(int c2=0; c2<Nc; c2++) {
+        Complex tmp = dir+c1+c2;
+        pokeColor(mat,tmp,c1,c2);
+    }}
+    u[dir] = mat;
+  }
+  unitarityCheck(u);
+
+//////////////////////////////////////
+/*      Fill quark_propagator:      */
+
+  LatticePropagator quark_propagator = zero;
+  for(int x=0; x<latt_size[0]; x++) {
+  for(int y=0; y<latt_size[1]; y++) {
+  for(int z=0; z<latt_size[2]; z++) {
+  for(int t=0; t<latt_size[3]; t++) {
+    multi1d<int> coord(4);
+    coord[0]=x;
+    coord[1]=y;
+    coord[2]=z;
+    coord[3]=t;
+    int index=t*latt_size[2]*latt_size[1]*latt_size[0]+z*latt_size[1]*latt_size[0]+y*latt_size[0]+x;
+    Propagator tmpProp;
+    for(int s1=0; s1<Ns; s1++) {
+    for(int s2=0; s2<Ns; s2++) {
+      ColorMatrix tmpMat;
+      for(int c1=0; c1<Nc; c1++) {
+      for(int c2=0; c2<Nc; c2++) {
+        Complex tmp = index+s1+s2+c1+c2;
+        pokeColor(tmpMat,tmp,c1,c2);
+      }}
+      pokeSpin(tmpProp,tmpMat,s1,s2);
+    }}
+    pokeSite(quark_propagator,tmpProp,coord);
   }}}}
 
-  for(int dir=0; dir<Nd; dir++) {
-    U[dir] = PeekIndex<LorentzIndex>(Umu,dir);
-  }
+//////////////////////////////////////
 
-  Gamma gamma5(Gamma::Gamma5);
-  LatticePropagator quark_propagator(&Grid);
-
-  for(int index=0; index<quark_propagator._odata.size(); index++) {
-  for(int s1=0; s1<Ns; s1++) {
-  for(int s2=0; s2<Ns; s2++) {
-  for(int c1=0; c1<Nc; c1++) {
-  for(int c2=0; c2<Nc; c2++) {
-    quark_propagator._odata[index]._internal._internal[s1][s2]._internal[c1][c2] = index+s1+s2+c1+c2;
-  }}}}}
-
+  Gamma gamma5 = Gamma(15);
   LatticePropagator anti_quark = gamma5 * quark_propagator * gamma5;
   anti_quark = adj(anti_quark);
-
-  LatticeColourMatrix gField = U[mu];
 
   double timeData[nData];
 
   for(int j=0; j<nData; j++) {
-    double start = usecond();
+    StopWatch timer;
+    timer.reset();
+    timer.start();
 
     for(int i=0; i<nLoops; i++) {
-      LatticePropagator tmp     = adj(gField) * quark_propagator;
-      LatticeComplex    corr_fn = trace(anti_quark * gamma5 * (gField*Cshift(quark_propagator,mu,length) - Cshift(tmp,mu,-length)) * gamma5);
-      //std::cout << corr_fn[0] << std::endl; break; //for test purposes
+      LatticeComplex corr_fn = trace(anti_quark * gamma5 * rightNabla(quark_propagator,u,mu,length) * gamma5);
+
+      //output for comparison:
+      /*multi1d<int> site(4); site[0] = 0; site[1] = 0; site[2] = 0; site[3] = 0;
+      Complex c0 = peekSite(corr_fn,site);
+      QDPIO::cout << endl << "out:" << c0 << endl; break;*/
     }
 
-    double stop = usecond();
+    timer.stop();
 
-    timeData[j] = (stop-start)/1000000.0;
+    timeData[j] = timer.getTimeInSeconds();
   }
 
   double time = average(timeData,nData);
 
-  Grid.Barrier();
+  int bossRank = 0;
+  int rank;
+  MPI_Comm_rank(MPI_COMM_WORLD,&rank);
+
+  MPI_Barrier(MPI_COMM_WORLD);
 
   double sumTime;
-  MPI_Reduce(&time,&sumTime,1,MPI_DOUBLE,MPI_SUM,Grid.BossRank(),Grid.communicator);
-  int nProc = Grid.ProcessorCount();
+  MPI_Reduce(&time,&sumTime,1,MPI_DOUBLE,MPI_SUM,bossRank,MPI_COMM_WORLD);
+
+  int nProc;
+  MPI_Comm_size(MPI_COMM_WORLD,&nProc);
   time = sumTime/nProc;
 
-  if(Grid.IsBoss()) {
+  if(rank == bossRank) {
     ofstream file;
     file.open(outFileName,ios::app);
     if(file.is_open()) {
       file << nThreads << "\t" << latt_size[0] << latt_size[1] << latt_size[2] << latt_size[3] << "\t"
-           << time << std::endl;
+           << Layout::vol() << "\t" << time << std::endl;
       file.close();
     } else {
       std::cerr << "Unable to open file!" << std::endl;
     }
   }
 
-  Grid_finalize();
+  END_CODE();
+  Chroma::finalize();
+  exit(0);
 }
