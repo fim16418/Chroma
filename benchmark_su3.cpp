@@ -31,13 +31,7 @@ See the full license in the file "LICENSE" in the top level distribution directo
 #include "actions/ferm/invert/syssolver_linop_cg.h"
 #include <fstream>
 
-#if defined(ENABLE_OPENMP)
 #include "omp.h"
-#else
-typedef int omp_int_t;
-inline void omp_set_num_threads(int num) {return;}
-inline omp_int_t omp_get_max_threads() {return 1;}
-#endif
 
 int nLoops;
 multi1d<int> latt_size(4);
