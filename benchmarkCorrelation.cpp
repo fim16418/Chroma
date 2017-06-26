@@ -184,8 +184,8 @@ int main(int argc, char **argv)
   MPI_Comm_size(MPI_COMM_WORLD,&nProc);
   time = sumTime/nProc;
 
-  unsigned long flopsPerLoop = 30262 * Layout::vol();
-  double flops = flopsPerLoop/1000000000.0*nLoops;
+  unsigned long flopsPerLoop = 2*30262;
+  double flops = flopsPerLoop/1000000000.0*Layout::vol()*nLoops;
 
   if(rank == bossRank) {
     ofstream file;
