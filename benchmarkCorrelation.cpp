@@ -194,7 +194,7 @@ int main(int argc, char **argv)
   error(timeData,nLoops,time,timeError);
 
   unsigned long flopsPerLoop = 2 * (3*10080 + 22);
-  double flops = flopsPerLoop/1000000000.0*Layout::vol()*nLoops;
+  double flops = flopsPerLoop/1000000000.0*Layout::vol();
 
   double flopsPerSec = flops/time;
   double flopsPerSecError = timeError/time * flopsPerSec;
