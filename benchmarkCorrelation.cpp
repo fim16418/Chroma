@@ -152,7 +152,7 @@ int main(int argc, char **argv)
   LatticePropagator anti_quark = gamma5 * quark_propagator * gamma5;
   anti_quark = adj(anti_quark);
 
-  LatticeComplex corr;
+  LatticeComplex corr = zero;
 
   /*///////////////
   // Calculation //
