@@ -207,7 +207,7 @@ int main(int argc, char **argv)
   //   Warm up   //
   ///////////////*/
 
-  for(int j=0; j<WARM_UP; j++) {
+  for(int i=0; i<WARM_UP; i++) {
     corr = trace(anti_quark * gamma5 * rightNabla(quark_propagator,u,mu,length) * gamma5);
   }
 
@@ -218,7 +218,7 @@ int main(int argc, char **argv)
 
   double timeData[nLoops];
 
-  for(int j=0; j<nLoops; j++) {
+  for(int i=0; i<nLoops; i++) {
     StopWatch timer;
     timer.reset();
     timer.start();
