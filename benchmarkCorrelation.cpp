@@ -33,7 +33,8 @@ See the full license in the file "LICENSE" in the top level distribution directo
 
 #include "omp.h"
 
-int nData;
+#define WARM_UP 10
+
 int nLoops;
 multi1d<int> latt_size(4);
 int nThreads;
@@ -42,18 +43,25 @@ std::string outFileName;
 using namespace QDP;
 using namespace Chroma;
 
-double average(double* array,int len)
+void error(double* array, int len, double& average, double& error)
 {
-  double av = 0.0;
+  average = 0.0;
+  double square = 0.0;
+
   for(int i=0; i<len; i++) {
-    av += array[i];
+    average += array[i];
+    square += array[i]*array[i];
   }
-  return av/len;
+
+  average = average/len;
+  square = square/len;
+
+  error = std::sqrt(square - average*average);
+  error /= std::sqrt(len);
 }
 
 bool processCmdLineArgs(int argc,char** argv)
 {
-  nData  = 1;
   nLoops = 1000;
   latt_size[0]=4; latt_size[1]=4; latt_size[2]=4; latt_size[3]=4;
   nThreads = omp_get_max_threads();
@@ -69,13 +77,6 @@ bool processCmdLineArgs(int argc,char** argv)
         i+=4;
       } else {
         std::cerr << "--lattice x y z t must be the last option." << std::endl;
-        return false;
-      }
-    } else if(option == "--nData") {
-      if(i+1 < argc) {
-        nData = atoi(argv[++i]);
-      } else {
-        std::cerr << "--nData option requires one argument." << std::endl;
         return false;
       }
     } else if(option == "--nLoops") {
@@ -103,8 +104,7 @@ bool processCmdLineArgs(int argc,char** argv)
     }
   }
   std::cout << "Lattice = " << latt_size[0] << " " << latt_size[1] << " " << latt_size[2] << " " << latt_size[3] << std::endl
-            << "Measurements = " << nData << std::endl
-            << "Loops per measurement = " << nLoops << std::endl
+            << "Loops = " << nLoops << std::endl
             << "Threads = " << omp_get_max_threads() << std::endl
             << "Output file = " << outFileName << std::endl << std::endl;
   return true;
@@ -121,6 +121,10 @@ int main(int argc, char **argv)
     Chroma::finalize();
     exit(1);
   }
+
+  /*//////////////////
+  // Initialization //
+  //////////////////*/
 
   Layout::setLattSize(latt_size);
   Layout::create();
@@ -148,51 +152,67 @@ int main(int argc, char **argv)
   LatticePropagator anti_quark = gamma5 * quark_propagator * gamma5;
   anti_quark = adj(anti_quark);
 
-  double timeData[nData];
+  LatticeComplex corr;
 
-  for(int j=0; j<nData; j++) {
+  /*///////////////
+  // Calculation //
+  //   Warm up   //
+  ///////////////*/
+
+  for(int j=0; j<WARM_UP; j++) {
+    corr = trace(anti_quark * gamma5 * quark_propagator * gamma5);
+  }
+
+  /*///////////////
+  // Calculation //
+  // Measurement //
+  ///////////////*/
+
+  double timeData[nLoops];
+
+  for(int j=0; j<nLoops; j++) {
     StopWatch timer;
     timer.reset();
     timer.start();
 
-    for(int i=0; i<nLoops; i++) {
-      LatticeComplex corr_fn = trace(anti_quark * gamma5 * quark_propagator * gamma5);
+    corr = trace(anti_quark * gamma5 * quark_propagator * gamma5);
 
-      //output for comparison:
-      /*multi1d<int> site(4); site[0] = 0; site[1] = 0; site[2] = 0; site[3] = 0;
-      Complex c0 = peekSite(corr_fn,site);
-      QDPIO::cout << endl << "out:" << c0 << endl; break;*/
-    }
+    //output for comparison:
+    /*multi1d<int> site(4); site[0] = 0; site[1] = 0; site[2] = 0; site[3] = 0;
+    Complex c0 = peekSite(corr_fn,site);
+    QDPIO::cout << endl << "out:" << c0 << endl; break;*/
 
     timer.stop();
-
-    timeData[j] = timer.getTimeInSeconds();
+    timeData[i] = timer.getTimeInSeconds();
   }
 
-  double time = average(timeData,nData);
+  /*//////////////
+  // Evaluation //
+  //////////////*/
+
+  double time, timeError;
+  error(timeData,nLoops,time,timeError);
+
+  unsigned long flopsPerLoop = 2 * (3*10080 + 22);
+  double flops = flopsPerLoop/1000000000.0*Layout::vol()*nLoops;
+
+  double flopsPerSec = flops/time;
+  double flopsPerSecError = timeError/time * flopsPerSec;
+
+  /*/////////////////
+  // Print results //
+  /////////////////*/
 
   int bossRank = 0;
   int rank;
   MPI_Comm_rank(MPI_COMM_WORLD,&rank);
-
-  MPI_Barrier(MPI_COMM_WORLD);
-
-  double sumTime;
-  MPI_Reduce(&time,&sumTime,1,MPI_DOUBLE,MPI_SUM,bossRank,MPI_COMM_WORLD);
-
-  int nProc;
-  MPI_Comm_size(MPI_COMM_WORLD,&nProc);
-  time = sumTime/nProc;
-
-  unsigned long flopsPerLoop = 2*30262;
-  double flops = flopsPerLoop/1000000000.0*Layout::vol()*nLoops;
 
   if(rank == bossRank) {
     ofstream file;
     file.open(outFileName,ios::app);
     if(file.is_open()) {
       file << nThreads << "\t" << latt_size[0] << latt_size[1] << latt_size[2] << latt_size[3] << "\t"
-           << Layout::vol() << "\t" << time << "\t" << flops/time << std::endl;
+           << Layout::vol() << "\t" << time << "\t" << timeError << "\t" << flopsPerSec << "\t" << flopsPerSecError << std::endl;
       file.close();
     } else {
       std::cerr << "Unable to open file!" << std::endl;
